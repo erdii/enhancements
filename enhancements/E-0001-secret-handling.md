@@ -70,7 +70,7 @@ How will we know that this has succeeded?
 - Users can provide existing secret references to a package.
 - Package maintainer don't have to hard-code secret names.
 - Package maintainers can sync referenced-secrets to namespaces created within a ClusterPackage.
-- TODO clarify: Package maintainers can reference the pull secret of the templated image? for trees of private images???
+- Package maintainers can reference the pull secret of the templated image in case the package deploys another package (which is probably a component in from the same package image).
 
 ### Non-Goals
 
@@ -198,9 +198,27 @@ proposal will be implemented, this is the place to discuss them.
   - multiple `SecretSync` objects can target the same source secret (so that multiple `(Cluster)Packages` can subscribe to a secret without further coordination)
   - status reporting
   - resyncing
-- TODO: describe `(Cluster)Package` API changes
+- `(Cluster)Package` API changes:
   - package image pull secret
-  - secret references
+    - to satisfy the requirement of being able to reference the pull secret within the package's templates I propose that the package image pull secret references an existing aliased secret reference from the list in the next bulletpoint.
+      ```yaml
+      spec:
+        imagePullSecret: my-pull # has to match an alias from `.spec.secretRefs`
+      ```
+  - secret references: a list of aliases for secret references in the cluster.
+    - Example:
+      ```yaml
+      spec:
+        secretRefs:
+        - alias: foo
+          ref:
+            name: name-of-secret-in-cluster
+            namespace: namespace-if-this-is-a-clusterpackage-ignored-if-package
+        - alias: my-pull
+          ref:
+            name: name-of-pull-secret-in-cluster
+            namespace: namespace-if-this-is-a-clusterpackage-ignored-if-package
+      ```
 - TODO: describe `kubectl-package` changes
   - validation changes at packaging time
   - introduction of a new `inspect` command to inspect a package image and show its specified secret requirements
@@ -588,9 +606,36 @@ Major milestones might include:
 <!--
 Why should this enhancement proposal _not_ be implemented?
 -->
-- Building a feature to sync secrets between namespaces managed by ClusterPackage objects will probably prompt users to ask for generic object-syncing to copy other common objects around (an example being an internal CA certificate stored in a ConfigMap object).
+- Building a feature to sync secrets between namespaces managed by ClusterPackage objects will probably prompt users to ask for generic object-syncing to copy other common objects around (an example being an internal CA certificate stored in a ConfigMap object). We should probably implement the sync feature for both ConfigMaps and Secrets but cannot provide facilities for every possible GroupVersionKind in the cluster or our caches would grow enormously which gives me serious scaling concerns.
 
 
 ## Alternatives
 
 - Except for package image pull-secret support, all secret handling functionality could be replaced by adding objects to packages that request secrets from other sources, for example using the [Vault Secrets Operator](https://github.com/hashicorp/vault-secrets-operator) or using an operator that can copy objects from other places in the cluster.
+
+- secret aliasing for package templates could also be a more generic obejct aliasing framework instead:
+  ```yaml
+  kind: Package
+  spec:
+    objectRefs:
+    - alias: my-cm
+      ref:
+        api: ""
+        kind: ConfigMap
+        name: an-existing-cm
+    - alias: my-secret
+      ref:
+        api: ""
+        kind: Secret
+        name: an-existing-secret
+    - alias: my-service
+      ref:
+        api: ""
+        kind: Service
+        name: an-existing-service
+    - alias: my-plumbus
+      ref:
+        api: ""
+        kind: Plumbus
+        name: an-existing-plumbus
+  ```
