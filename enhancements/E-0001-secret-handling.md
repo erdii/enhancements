@@ -95,21 +95,21 @@ nitty-gritty.
   - allowing a specified `Secret` source object to be synced to multiple specified namespace/name combinations
   - implementing status reporting so that it can be used as a building block in automations - for example:
     - PKO phases waiting for successful synchronization
-    - PKO probes reflecting degraded workload health when a synced secret vanishes or during out-of-sync times after a source secret has been changed and the resynchronization hasn't happened yet
+    - (Optional - feasibility unverified) PKO probes reflecting degraded workload health when a synced secret vanishes or during out-of-sync times after a source secret has been changed and the resynchronization hasn't happened yet
   - usage can either happen
     - freely (without using PKO's other API functionalities), maybe solving other problems of users not taken into further consideration in this proposal other than thinking about the performance implications on PKO and the apiserver this might have
     - within packages with an additional guardrail (dubbed `secret-sync-fence`):
-      - By default, PKO checks that a `SecretSync` object that is templated by a package in the templating phase references one of the secrets specified in the `(Cluster)Package` object controlling the `(Cluster)ObjectSet` about to be created or updated to avoid accidentally syncing the wrong secrets
+      - By default, PKO checks that a `SecretSync` object that is templated by a package in the templating phase references one of the secrets specified in the `(Cluster)Package` object controlling the `(Cluster)ObjectDeployment` about to be created or updated to avoid accidentally syncing the wrong secrets
       - This mechanism should have an opt-out hatch if one has good reasons to include specific `SecretSync` objects with hardcoded sources.
-      - This mechanism will probably turn out to be validatable at packaging- AND run-time. Validating at packaging-time would left-shift surfacing of guardrail violations and safe a lot of iteration time!
+      - This mechanism will probably turn out to be validatable at packaging- AND run-time. Validating at packaging-time would left-shift surfacing of guardrail violations and save a lot of iteration time!
       - Important: this guardrail cannot be used for defensive security against malicious packagers because it would be easy to put an evil SecretSync object into a wrapper object like an OpenShift `Template` (or another `Package`), as PKO cannot possibly understand and correctly detect and unpack all possible forms of a "trojan horse" object.
-        - personal recommendation from Josh: implement validation of sigstore signatures on package images.
+        - personal recommendation from Josh: If you want to be sure about the authenticity of a package image, implement validation of sigstore signatures on package images.
 
 - The PackageManifest API has to be changed so that `Secret` references can be specified and aliased. References specify:
   - an alias name to be used with newly introduced resolving functions in the package templates
   - when package is installable cluster-scoped: a namespaced name of the source secret
   - when package is installable namespace-scoped: a name of the source secret which is expected in the Package's target namespace
-  - ~if the reference is optional or not (TODO: clarify implications - probably better off to start without optional secrets and introduce them later when needed. Big point: how to handle optionality without polling for secret's to appear? When to check for existence of secrets?)~
+  - ~if the reference is optional or not (`TODO`: clarify implications - probably better off to start without optional secrets and introduce them later when needed. Big point: how to handle optionality without polling for secret's to appear? The package reconciler doesn't declaratively re-template the ObjectDeployment except, when .spec.image changes)~
 
 - The `(Cluster)Package` API has to be changed to
   - allow the specification of an `ImagePullSecret` for pulling the package image itself from a private registry.
@@ -177,7 +177,7 @@ Consider including folks who also work outside the SIG or subproject.
 -->
 - Risk of copying the wrong secrets to the wrong places, leaking secrets to an unintended audience.
   - Although this is a real risk,
-    1. we're not really more afraid of mixing up `Secrets` than mixing up other `Object` types
+    1. we're not really more afraid of mixing up `Secrets` than mixing up other `Object` types.
     2. we'll be adding extensive integration tests to the PKO codebase in an attempt to catch any potential bugs which would result in such a leaky scenario
 
 ## Design Details
@@ -189,39 +189,146 @@ required) or even code snippets. If there's any ambiguity about HOW your
 proposal will be implemented, this is the place to discuss them.
 -->
 
+### Changes
 
-- TODO: describe `PackageManifest` API changes
-- TODO: describe new package templating functions to resolve secret references by alias
-- TODO: describe `SecretSync` functionality (+ combined usage with new package templating functions to resolve alias)
-  - one source secret per `SecretSync`
-  - many destinations per `SecretSync`
-  - multiple `SecretSync` objects can target the same source secret (so that multiple `(Cluster)Packages` can subscribe to a secret without further coordination)
-  - status reporting
-  - resyncing
-- `(Cluster)Package` API changes:
-  - package image pull secret
-    - to satisfy the requirement of being able to reference the pull secret within the package's templates I propose that the package image pull secret references an existing aliased secret reference from the list in the next bulletpoint.
-      ```yaml
-      spec:
-        imagePullSecret: my-pull # has to match an alias from `.spec.secretRefs`
-      ```
-  - secret references: a list of aliases for secret references in the cluster.
-    - Example:
-      ```yaml
-      spec:
-        secretRefs:
-        - alias: foo
-          ref:
-            name: name-of-secret-in-cluster
-            namespace: namespace-if-this-is-a-clusterpackage-ignored-if-package
-        - alias: my-pull
-          ref:
-            name: name-of-pull-secret-in-cluster
-            namespace: namespace-if-this-is-a-clusterpackage-ignored-if-package
-      ```
-- TODO: describe `kubectl-package` changes
-  - validation changes at packaging time
-  - introduction of a new `inspect` command to inspect a package image and show its specified secret requirements
+#### PackageManifest API changes
+
+The PackageManifest API needs to be changed to include an optional list `.spec.secretRefAliases`, which allows the person writing the object manifests/templates inside the package image to
+  - communicate required secret references to the person deploying the package.
+  - refer to secrets in their templates using the specified alias.
+This effectively decouples package templates and the runtime cluster context and allows the packager to forgo hardcoding magic secret references into the package templates.
+
+
+```yaml
+apiVersion: manifests.package-operator.run/v1alpha1
+kind: PackageManifest
+metadata:
+  name: my-package
+spec:
+  # Optional: specify a list of aliases for referecing secrets in templates.
+  secretRefAliases:
+  - name: tls-keypair-and-certs
+```
+
+#### (Cluster)Package API changes
+
+The (Cluster)Package APIs need to be changed to include these new fields under `.spec`:
+1. an optional list of `secretRefs`, which can be refered to in the package's templates. For more information, refer to the sections about the PackageManifest and templating changes.
+2. an optional `imagePullSecret` field which refers to an existing secret alias from `.spec.secretRefs`. If specified, the secret is resolved and used to authenticate against the registry when pulling the package image.
+
+
+```yaml
+kind: Package
+spec:
+  # Optional: if specified, the secret reference with matching alias in `.spec.secretRefs` is used to pull the package image from its registry.
+  imagePullSecret: image-pull-credentials
+
+  # Optional: specify a list of secret references and the alias they fulfill.
+  secretRefs:
+  - alias: tls-keypair-and-cert
+    ref:
+      name: my-example-app-cert
+      namespace: tls-certificates
+  - alias: image-pull-credentials
+    ref:
+      name: image-pull-quay-io
+      namespace: pull-secrets
+```
+
+Note: PKO should implement pre-flight checks to validate that all aliased secret refs requested by the PackageManifest are actually supplied in the Package object.
+Note: PKO must include the secretRefs into the hashing algo that is used to determine if the package controller should re-template the Package's ObjectDeployment.
+
+#### Package Templating changes
+
+The templating engine needs to be changed to include functionality that resolved and exposes the aliased secret references.
+Note: In this context resolving means: translate from alias to specified reference.
+
+- `secret "alias"` -> looks up the aliased secret reference and returns the full reference object
+- `secretName "alias"` -> looks up the aliased secret reference and returns the name of the referenced secret
+- `secretNamespace "alias"` -> looks up the aliased secret reference and returns the namespace of the referenced secret
+
+Note: Failure to resolve an alias should result in an error that aborts the template execution to avoid silencing a propably unwanted situation.
+
+#### Introduction of SecretSync API
+
+A new kind `SecretSync` has to be introduced to enable cross-namespace synchronization of secrets that already pre-exist in the cluster.
+
+This api must support
+- Specifying one synchronization strategy out of:
+  - `watch`
+    - PKO uses Server-Side-Apply to add the cache label to the source secret which makes it visible to the dynamic cache.
+    - PKO instructs the dynamicCache facility to watch the Secret GVK and requeue SecretSync reconciliation when the source secret changes.
+    - Note: PKO must establish the cache finalizer on the SecretSync object so it can ensure that it can remove the cache label from the source secret and cache resources are freed properly.
+  - `poll`
+    - PKO does not watch the source secret, but it will periodically re-run the full reconciliation procedure for the SecretSync object in a user specified interval.
+    - The user must be able to specify the poll interval in the object manifest.
+- Specifying a required reference (namespaced name) to a source secret which serves as synchronization input.
+- Specifying a required list of destination secret references (namespaced names) which will serve as synchronization output.
+- An optional pause field which allows a user to (temporarily) disable synchronization for debugging purposes.
+
+Example that watches the input secret:
+```yaml
+apiVersion: package-operator.run/v1alpha1
+kind: SecretSync
+metadata:
+  name: bootstrap-token
+spec:
+  paused: false
+  strategy:
+    watch: {}
+  src:
+    namespace: kube-system
+    name: bootstrap-token-abcdef
+  dest:
+  - namespace: default
+    name: synced-bootstrap-token
+```
+
+Example that polls the input secret:
+```yaml
+apiVersion: package-operator.run/v1alpha1
+kind: SecretSync
+metadata:
+  name: bootstrap-token
+spec:
+  paused: false
+  strategy:
+    poll:
+      interval: 15m
+  src:
+    namespace: kube-system
+    name: bootstrap-token-abcdef
+  dest:
+  - namespace: default
+    name: synced-bootstrap-token
+```
+
+The api must:
+- Default `.strategy` to `{watch: {}}` (default to the watch strategy if unspecified).
+- Enforce that only `.stategy.watch` or `.stategy.poll` are set and not both.
+- Enforce that, if the `poll` strategy is in use, then `.stategy.poll.interval` must be set.
+- Enforce a lower bound on `.stategy.poll.interval` to prevent DoSing the pko-manager.
+- Enforce an upper bound on the length of `.spec.dest[]` which must not exceed 32 items to prevent DoSing the pko-manager.
+- Enforce unique items in `.spec.dest[]`.
+- Report a Paused status condition.
+- Report a Sync status condition.
+  - (Optional - feasibility unverified) PKO probes reflecting degraded workload health when a synced secret vanishes or during out-of-sync times after a source secret has been changed and the resynchronization hasn't happened yet
+- Report a Phase, like our other APIs do, too.
+
+#### Package controller changes for SecretSync support features
+
+TODO: run this by [@thetechnick](https://github.com/thetechnick) again.
+
+The package controller should be changed to include the following "synergy" feature for SecretSync objects in Packages.
+
+To prevent unforeseen mishaps, when the rendered output of a package includes a SecretSync Object, PKO must validate that the object reference in `SecretSync.spec.src` points to a secret that is aliased in `.spec.secretRefs`.
+This cannot be relied on as a security feature because it is very easy to include wrapper objects (like OpenShift's Template objects) that act as trojan horses, but it serves as a guiding rail that steers package maintainers away from including hard-coded SecretSyncs in their packages and instead honor the user by declaring and aliasing secret references in the PackageManifest, so that they can be supplied dynamically at deployment time.
+
+#### Adapt kubectl-package
+
+Kubectl-package must introduce a new `inspect` command that prints its specified secret requirements.
+The output format is not specified here but it should be open to being expanded with other data about the package and being json/yaml formattable to aid further feature work in the future.
+
 
 ### Upgrade / Downgrade Strategy
 
@@ -608,12 +715,11 @@ Why should this enhancement proposal _not_ be implemented?
 -->
 - Building a feature to sync secrets between namespaces managed by ClusterPackage objects will probably prompt users to ask for generic object-syncing to copy other common objects around (an example being an internal CA certificate stored in a ConfigMap object). We should probably implement the sync feature for both ConfigMaps and Secrets but cannot provide facilities for every possible GroupVersionKind in the cluster or our caches would grow enormously which gives me serious scaling concerns.
 
-
 ## Alternatives
 
 - Except for package image pull-secret support, all secret handling functionality could be replaced by adding objects to packages that request secrets from other sources, for example using the [Vault Secrets Operator](https://github.com/hashicorp/vault-secrets-operator) or using an operator that can copy objects from other places in the cluster.
 
-- secret aliasing for package templates could also be a more generic obejct aliasing framework instead:
+- secret aliasing for package templates could also be a more generic obejct aliasing framework instead (but we probably don't want to open that can of worms caching wise):
   ```yaml
   kind: Package
   spec:
