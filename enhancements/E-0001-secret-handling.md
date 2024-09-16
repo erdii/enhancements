@@ -317,7 +317,7 @@ The api must:
 
 #### Package controller changes for SecretSync support features
 
-TODO: run this by [@thetechnick](https://github.com/thetechnick) again.
+TODO: run this by [@thetechnick](https://github.com/thetechnick) again. Should we provide this feature and if we do, should we build an opt out mechanism? I think yes because we don't want to unneccessarily restrict the freedom of what can be in a package.
 
 The package controller should be changed to include the following "synergy" feature for SecretSync objects in Packages.
 
