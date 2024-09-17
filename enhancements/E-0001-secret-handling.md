@@ -304,10 +304,11 @@ spec:
 ```
 
 The api must:
-- Default `.strategy` to `{watch: {}}` (default to the watch strategy if unspecified).
-- Enforce that only `.stategy.watch` or `.stategy.poll` are set and not both.
-- Enforce that, if the `poll` strategy is in use, then `.stategy.poll.interval` must be set.
-- Enforce a lower bound on `.stategy.poll.interval` to prevent DoSing the pko-manager.
+- Default `.spec.strategy` to `{watch: {}}` (default to the watch strategy if unspecified).
+- Enforce that the `.spec.strategy` is immutable and cannot be chanded on a live SecretSync object to avoid cache/finalizer confusions.
+- Enforce that only `.spec.stategy.watch` or `.spec.stategy.poll` are set and not both.
+- Enforce that, if the `poll` strategy is in use, then `.spec.stategy.poll.interval` must be set.
+- Enforce a lower bound on `.spec.stategy.poll.interval` to prevent DoSing the pko-manager.
 - Enforce an upper bound on the length of `.spec.dest[]` which must not exceed 32 items to prevent DoSing the pko-manager.
 - Enforce unique items in `.spec.dest[]`.
 - Report a Paused status condition.
