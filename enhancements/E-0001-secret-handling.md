@@ -54,8 +54,9 @@ demonstrate the interest in a Enhancement Proposal within the wider community.
 [experience reports]: https://github.com/golang/go/wiki/ExperienceReports
 -->
 
-- Users deploying a package want to be able to pull package images from private registries, by supplying a reference to an existing secret object containing a valid pull secret.
-- Users crafting a package want to be able to declare secret references, and dynamically reference them with an alias name.
+- Users deploying a package want to be able to pull package images from private registries.
+- Package authors want the ability to declare secrets used within the package.
+- Secret references are used to not duplicate sensitive information through PKO APIs.
 - Users deploying a package want to be able to pass secret references into the package templating engine.
 - Users deploying a cluster-package don't want to worry about copying secrets into newly-created namespaces (and updating/deleting them, too).
 
@@ -101,7 +102,6 @@ nitty-gritty.
     - within packages with an additional guardrail (dubbed `secret-sync-fence`):
       - By default, PKO checks that a `SecretSync` object that is templated by a package in the templating phase references one of the secrets specified in the `(Cluster)Package` object controlling the `(Cluster)ObjectDeployment` about to be created or updated to avoid accidentally syncing the wrong secrets
       - This mechanism should have an opt-out hatch if one has good reasons to include specific `SecretSync` objects with hardcoded sources.
-      - This mechanism will probably turn out to be validatable at packaging- AND run-time. Validating at packaging-time would left-shift surfacing of guardrail violations and save a lot of iteration time!
       - Important: this guardrail cannot be used for defensive security against malicious packagers because it would be easy to put an evil SecretSync object into a wrapper object like an OpenShift `Template` (or another `Package`), as PKO cannot possibly understand and correctly detect and unpack all possible forms of a "trojan horse" object.
         - personal recommendation from Josh: If you want to be sure about the authenticity of a package image, implement validation of sigstore signatures on package images.
 
@@ -109,7 +109,7 @@ nitty-gritty.
   - an alias name to be used with newly introduced resolving functions in the package templates
   - when package is installable cluster-scoped: a namespaced name of the source secret
   - when package is installable namespace-scoped: a name of the source secret which is expected in the Package's target namespace
-  - ~if the reference is optional or not (`TODO`: clarify implications - probably better off to start without optional secrets and introduce them later when needed. Big point: how to handle optionality without polling for secret's to appear? The package reconciler doesn't declaratively re-template the ObjectDeployment except, when .spec.image changes)~
+  - if the reference is optional or not.
 
 - The `(Cluster)Package` API has to be changed to
   - allow the specification of an `ImagePullSecret` for pulling the package image itself from a private registry.
@@ -120,10 +120,6 @@ nitty-gritty.
   - include ways for an end-user to inspect a package image and get a list of secret references that the `(Cluster)Package` requires.
     - This could be part of an overall `kubectl package inspect docker://quay.io/foo/bar-package` command that shows interesting information about a package to the end-user.
 
-- for handling `ConfigMaps` the described changes could either be duplicated in all affected APIs with `s/Secret/ConfigMap/` or the described API could be made generic (what are the implications of either? I can think of questions about caching and watching/caching too many different object kinds to stay performant).
-
-
-<!-- Extend existig (Cluster)Package and PackageManifest APIs with  -->
 
 ### User Stories
 
@@ -206,8 +202,12 @@ metadata:
   name: my-package
 spec:
   # Optional: specify a list of aliases for referecing secrets in templates.
-  secretRefAliases:
+  secrets:
   - name: tls-keypair-and-certs
+    desc: |-
+      Reference to a secret of type `kubernetes.io/tls`.
+      Used for tls termination that is configured by the
+      ingress object included in this package.
 ```
 
 #### (Cluster)Package API changes
@@ -318,18 +318,12 @@ The api must:
 
 #### Package controller changes for SecretSync support features
 
-TODO: run this by [@thetechnick](https://github.com/thetechnick) again. Should we provide this feature and if we do, should we build an opt out mechanism? I think yes because we don't want to unneccessarily restrict the freedom of what can be in a package.
+TODO: run this by [@thetechnick](https://github.com/thetechnick) again. Should we provide this feature and if we do, should we build an opt out mechanism? I think we should provide an opt-out because we don't want to unneccessarily restrict the freedom of what can be in a package.
 
 The package controller should be changed to include the following "synergy" feature for SecretSync objects in Packages.
 
 To prevent unforeseen mishaps, when the rendered output of a package includes a SecretSync Object, PKO must validate that the object reference in `SecretSync.spec.src` points to a secret that is aliased in `.spec.secretRefs`.
 This cannot be relied on as a security feature because it is very easy to include wrapper objects (like OpenShift's Template objects) that act as trojan horses, but it serves as a guiding rail that steers package maintainers away from including hard-coded SecretSyncs in their packages and instead honor the user by declaring and aliasing secret references in the PackageManifest, so that they can be supplied dynamically at deployment time.
-
-#### Adapt kubectl-package
-
-Kubectl-package must introduce a new `inspect` command that prints its specified secret requirements.
-The output format is not specified here but it should be open to being expanded with other data about the package and being json/yaml formattable to aid further feature work in the future.
-
 
 ### Upgrade / Downgrade Strategy
 
