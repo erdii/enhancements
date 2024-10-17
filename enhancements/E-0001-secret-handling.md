@@ -80,6 +80,7 @@ What is out of scope for this enhancement proposal?
 Listing non-goals helps to focus discussion and make progress.
 -->
 - Providing facilities to automagically inject (pull) secret references into managed objects. (For example PodSpecs or (Cluster)Packages.)
+- Syncing secrets across the MC/HC barried in the HyperShift architecture.
 
 ## Proposal
 
@@ -94,12 +95,11 @@ nitty-gritty.
 
 - A new object of kind `SecretSync` will be introduced to the in-cluster API of PKO
   - allowing a specified `Secret` source object to be synced to multiple specified namespace/name combinations
-  - implementing status reporting so that it can be used as a building block in automations - for example:
-    - PKO phases waiting for successful synchronization
-    - (Optional - feasibility unverified) PKO probes reflecting degraded workload health when a synced secret vanishes or during out-of-sync times after a source secret has been changed and the resynchronization hasn't happened yet
+  - implementing status reporting so that it can be used as a building block in automations - for example: PKO phases waiting for successful synchronization before continuing with a package rollout.
   - usage can either happen
     - freely (without using PKO's other API functionalities), maybe solving other problems of users not taken into further consideration in this proposal other than thinking about the performance implications on PKO and the apiserver this might have
     - within packages with an additional guardrail (dubbed `secret-sync-fence`):
+      - Note: This guardrail should probably be dropped from the proposal to keep the complexity down.
       - By default, PKO checks that a `SecretSync` object that is templated by a package in the templating phase references one of the secrets specified in the `(Cluster)Package` object controlling the `(Cluster)ObjectDeployment` about to be created or updated to avoid accidentally syncing the wrong secrets
       - This mechanism should have an opt-out hatch if one has good reasons to include specific `SecretSync` objects with hardcoded sources.
       - Important: this guardrail cannot be used for defensive security against malicious packagers because it would be easy to put an evil SecretSync object into a wrapper object like an OpenShift `Template` (or another `Package`), as PKO cannot possibly understand and correctly detect and unpack all possible forms of a "trojan horse" object.
@@ -218,7 +218,7 @@ The (Cluster)Package APIs need to be changed to include these new fields under `
 
 
 ```yaml
-kind: Package
+kind: ClusterPackage
 spec:
   # Optional: if specified, the secret reference with matching alias in `.spec.secretRefs` is used to pull the package image from its registry.
   imagePullSecret: image-pull-credentials
@@ -235,8 +235,25 @@ spec:
       namespace: pull-secrets
 ```
 
+```yaml
+kind: Package
+spec:
+  # Optional: if specified, the secret reference with matching alias in `.spec.secretRefs` is used to pull the package image from its registry.
+  imagePullSecret: image-pull-credentials
+
+  # Optional: specify a list of secret references and the alias they fulfill.
+  secretRefs:
+  - alias: tls-keypair-and-cert
+    ref:
+      name: my-example-app-cert
+  - alias: image-pull-credentials
+    ref:
+      name: image-pull-quay-io
+```
+
 Note: PKO should implement pre-flight checks to validate that all aliased secret refs requested by the PackageManifest are actually supplied in the Package object.
-Note: PKO must include the secretRefs into the hashing algo that is used to determine if the package controller should re-template the Package's ObjectDeployment.
+Note: PKO must include the secretRefs values into the hashing algo that is used to determine if the package controller should re-template the Package's ObjectDeployment to ensure re-templating when the valued change.
+(This is not about watching the secrets themselves. Only the string values in package.spec.secretRefs.*.ref)
 
 #### Package Templating changes
 
@@ -305,15 +322,14 @@ spec:
 
 The api must:
 - Default `.spec.strategy` to `{watch: {}}` (default to the watch strategy if unspecified).
-- Enforce that the `.spec.strategy` is immutable and cannot be chanded on a live SecretSync object to avoid cache/finalizer confusions.
+- Enforce that the `.spec.strategy` is immutable and cannot be changed on a live SecretSync object to avoid cache/finalizer confusions.
 - Enforce that only `.spec.stategy.watch` or `.spec.stategy.poll` are set and not both.
 - Enforce that, if the `poll` strategy is in use, then `.spec.stategy.poll.interval` must be set.
 - Enforce a lower bound on `.spec.stategy.poll.interval` to prevent DoSing the pko-manager.
 - Enforce an upper bound on the length of `.spec.dest[]` which must not exceed 32 items to prevent DoSing the pko-manager.
-- Enforce unique items in `.spec.dest[]`.
+- Enforce unique items in `.spec.dest[]` + `.spec.src`.
 - Report a Paused status condition.
 - Report a Sync status condition.
-  - (Optional - feasibility unverified) PKO probes reflecting degraded workload health when a synced secret vanishes or during out-of-sync times after a source secret has been changed and the resynchronization hasn't happened yet
 - Report a Phase, like our other APIs do, too.
 
 #### Package controller changes for SecretSync support features
@@ -702,6 +718,7 @@ Major milestones might include:
 
 - [@Rob](https://github.com/robshelly) already created [SD-DDR-0011: Package Operator Private Registry Support](https://docs.google.com/document/d/1QwbTRQHrvopkZNxuh7HS7dfOsG6upe_QdVQQ8TXR444/) and came up with a design to handle image pull secrets.
 - [@Josh](https://github.com/erdii) already created [PR-514](https://github.com/package-operator/package-operator/pull/514) and [PR-579](https://github.com/package-operator/package-operator/pull/579) to explore implementation details of SD-DDR-0011.
+- [@Josh](https://github.com/erdii) has explored a draft reference implementation of the SecretSync API in [PR-1406](https://github.com/package-operator/package-operator/pull/1406)
 
 ## Drawbacks
 
