@@ -96,15 +96,9 @@ nitty-gritty.
 - A new object of kind `SecretSync` will be introduced to the in-cluster API of PKO
   - allowing a specified `Secret` source object to be synced to multiple specified namespace/name combinations
   - implementing status reporting so that it can be used as a building block in automations - for example: PKO phases waiting for successful synchronization before continuing with a package rollout.
-  - usage can either happen
-    - freely (without using PKO's other API functionalities), maybe solving other problems of users not taken into further consideration in this proposal other than thinking about the performance implications on PKO and the apiserver this might have
-    - within packages with an additional guardrail (dubbed `secret-sync-fence`):
-      - Note: This guardrail should probably be dropped from the proposal to keep the complexity down.
-      - By default, PKO checks that a `SecretSync` object that is templated by a package in the templating phase references one of the secrets specified in the `(Cluster)Package` object controlling the `(Cluster)ObjectDeployment` about to be created or updated to avoid accidentally syncing the wrong secrets
-      - This mechanism should have an opt-out hatch if one has good reasons to include specific `SecretSync` objects with hardcoded sources.
-      - Important: this guardrail cannot be used for defensive security against malicious packagers because it would be easy to put an evil SecretSync object into a wrapper object like an OpenShift `Template` (or another `Package`), as PKO cannot possibly understand and correctly detect and unpack all possible forms of a "trojan horse" object.
-        - personal recommendation from Josh: If you want to be sure about the authenticity of a package image, implement validation of sigstore signatures on package images.
-
+  - usage can happen
+  -   freely (without using PKO's other API functionalities), maybe solving other problems of users not taken into further consideration in this proposal other than thinking about the performance implications on PKO and the apiserver this might have
+  - within packages
 - The PackageManifest API has to be changed so that `Secret` references can be specified and aliased. References specify:
   - an alias name to be used with newly introduced resolving functions in the package templates
   - when package is installable cluster-scoped: a namespaced name of the source secret
@@ -114,11 +108,6 @@ nitty-gritty.
 - The `(Cluster)Package` API has to be changed to
   - allow the specification of an `ImagePullSecret` for pulling the package image itself from a private registry.
   - allow an end-user to supply a list of secret references and bind them to the alias names described in the `PackageManifest` by the packaging person.
-
-- The `kubectl-package` cli has to be changed to
-  - include validation for the `secret-sync-fence` guardrail
-  - include ways for an end-user to inspect a package image and get a list of secret references that the `(Cluster)Package` requires.
-    - This could be part of an overall `kubectl package inspect docker://quay.io/foo/bar-package` command that shows interesting information about a package to the end-user.
 
 
 ### User Stories
@@ -331,15 +320,6 @@ The api must:
 - Report a Paused status condition.
 - Report a Sync status condition.
 - Report a Phase, like our other APIs do, too.
-
-#### Package controller changes for SecretSync support features
-
-TODO: run this by [@thetechnick](https://github.com/thetechnick) again. Should we provide this feature and if we do, should we build an opt out mechanism? I think we should provide an opt-out because we don't want to unneccessarily restrict the freedom of what can be in a package.
-
-The package controller should be changed to include the following "synergy" feature for SecretSync objects in Packages.
-
-To prevent unforeseen mishaps, when the rendered output of a package includes a SecretSync Object, PKO must validate that the object reference in `SecretSync.spec.src` points to a secret that is aliased in `.spec.secretRefs`.
-This cannot be relied on as a security feature because it is very easy to include wrapper objects (like OpenShift's Template objects) that act as trojan horses, but it serves as a guiding rail that steers package maintainers away from including hard-coded SecretSyncs in their packages and instead honor the user by declaring and aliasing secret references in the PackageManifest, so that they can be supplied dynamically at deployment time.
 
 ### Upgrade / Downgrade Strategy
 
