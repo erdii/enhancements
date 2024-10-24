@@ -320,6 +320,7 @@ The api must:
 - Report a Paused status condition.
 - Report a Sync status condition.
 - Report a Phase, like our other APIs do, too.
+- Provide the same collision prevention semantics and settings as the core PKO APIs do.
 
 ### Upgrade / Downgrade Strategy
 
